@@ -1,6 +1,6 @@
 using SQLite
+using DBInterface
 using DataFrames
-
 function connect_sqlite()
     return SQLite.DB("test_simple_grid_database.sqlite")
 end
