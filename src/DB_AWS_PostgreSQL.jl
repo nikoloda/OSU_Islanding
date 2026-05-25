@@ -1,4 +1,4 @@
-# Must run in terminal while open s
+# Must run in a terminal while the SSH tunnel is open
 
 # LibPQ is a Julia wrapper for PostgreSQL which helps us use PostgreSQL and also connect to foreign instances
 using LibPQ
