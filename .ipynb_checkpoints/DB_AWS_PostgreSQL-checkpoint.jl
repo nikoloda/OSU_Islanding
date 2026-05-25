@@ -6,8 +6,21 @@ using LibPQ
 using DataFrames
 
 function connect_pg()
-    # Connect to the tunnel entrance on your own machine
-    conn_str = "host=localhost port=5433 user=testnikoloda dbname=postgres password=___"
+    # Prefer a full connection string, then fall back to standard libpq env vars.
+    conn_str = get(ENV, "PG_CONN", "")
+    if isempty(strip(conn_str))
+        host = get(ENV, "PGHOST", "")
+        port = get(ENV, "PGPORT", "")
+        user = get(ENV, "PGUSER", "")
+        dbname = get(ENV, "PGDATABASE", "")
+        password = get(ENV, "PGPASSWORD", "")
+
+        if any(isempty, (host, port, user, dbname, password))
+            error("Set PG_CONN or PGHOST, PGPORT, PGUSER, PGDATABASE, and PGPASSWORD in your environment.")
+        end
+
+        conn_str = "host=$host port=$port user=$user dbname=$dbname password=$password"
+    end
     
     conn = LibPQ.Connection(conn_str)
     println("Success! Connected through the tunnel.")
