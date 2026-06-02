@@ -1,73 +1,50 @@
-using Dates
-using Random
-using Printf
+using PowerModels
+using Ipopt
 
-base_case = joinpath(@__DIR__, "..", "cases", "case14.m")
-output_dir = joinpath(@__DIR__, "..", "data", "generated_cases")
-interval_seconds = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 300
-count = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 0
-sigma = length(ARGS) >= 3 ? parse(Float64, ARGS[3]) : 0.01
-meter_bus_id = 6
-rng = MersenneTwister(42)
+# 1. Define the 24-hour diurnal load curve
+load_curve = [
+    0.50, 0.45, 0.45, 0.50, 0.60, 0.75, 0.85, 0.90, 0.95, 0.95, 0.95, 0.95, 
+    0.95, 0.95, 0.95, 0.95, 0.95, 1.00, 0.95, 0.90, 0.80, 0.70, 0.60, 0.55
+]
 
-format_number(value) = replace(replace(@sprintf("%.6f", round(Float64(value); digits = 6)), r"0+$" => ""), r"\.$" => "")
-
-function perturb_bus_block(case_text::String)
-    parts = split(case_text, "mpc.bus = ["; limit = 2)
-    length(parts) == 2 || error("Could not find mpc.bus block")
-
-    tail = split(parts[2], "];"; limit = 2)
-    length(tail) == 2 || error("Could not find end of mpc.bus block")
-
-    new_lines = String[]
-    for line in split(tail[1], '\n'; keepempty = true)
-        row = strip(line)
-        if endswith(row, ";")
-            cols = split(replace(row, ";" => ""))
-            if length(cols) >= 13
-                bus_id = parse(Int, cols[1])
-                load_scale = clamp(1 + randn(rng) * sigma, 0.92, 1.08)
-                if bus_id == meter_bus_id
-                    load_scale = clamp(load_scale + randn(rng) * (sigma * 0.5), 0.9, 1.12)
-                end
-                pd = parse(Float64, cols[3])
-                qd = parse(Float64, cols[4])
-                if pd != 0.0
-                    cols[3] = format_number(pd * load_scale)
-                end
-                if qd != 0.0
-                    cols[4] = format_number(qd * load_scale)
-                end
-                line = join(cols, '\t') * ";"
-            end
-        end
-        push!(new_lines, line)
-    end
-
-    return parts[1] * "mpc.bus = [\n" * join(new_lines, "\n") * "\n];" * tail[2]
-end
-
+# Load the base case and create the output directory
+network = PowerModels.parse_file("cases/case2383wp.m")
+output_dir = "data/generated_cases"
 mkpath(output_dir)
-case_text = read(base_case, String)
 
-println("Generating synthetic cases from $(base_case)")
-println("Writing to $(output_dir) every $(interval_seconds) seconds")
+# 2. Raw solver initialization (Warning: This will print the Ipopt log to the console)
+solver = Ipopt.Optimizer
 
-i = 1
-while count == 0 || i <= count
-    mutated = perturb_bus_block(case_text)
-    stamp = Dates.format(now(), "yyyymmdd_HHMMSS")
-    file_name = "case14_synthetic_$(stamp)_$(lpad(string(i), 4, '0')).m"
-    file_path = joinpath(output_dir, file_name)
-
-    open(file_path, "w") do io
-        write(io, mutated)
+for hour in 1:24
+    # Create a fresh network state for this specific hour
+    variant = deepcopy(network)
+    
+    # Scale the load for the current hour
+    for (load_id, load) in variant["load"]
+        load["pd"] *= load_curve[hour]
+        load["qd"] *= load_curve[hour] 
     end
-
-    println("Wrote $(file_path)")
-
-    i += 1
-    if count == 0 || i <= count
-        sleep(interval_seconds)
+    
+    # Relax Generator Pmin to prevent over-generation infeasibility
+    for (gen_id, gen) in variant["gen"]
+        if gen["pmin"] > 0
+            gen["pmin"] = 0.0
+        end
+    end
+    
+    # 3. Run Optimal Power Flow using the raw solver
+    result = solve_ac_opf(variant, solver)
+    status_string = string(result["termination_status"])
+    
+    # Robust string-based status check 
+    if status_string in ["LOCALLY_SOLVED", "ALMOST_LOCALLY_SOLVED", "OPTIMAL"]
+        # Merge the solved states back into the dictionary
+        PowerModels.update_data!(variant, result["solution"])
+        
+        # Save the physically accurate state
+        PowerModels.export_matpower(joinpath(output_dir, "diurnal_hour_$hour.m"), variant)
+        println("Hour $hour: Successfully dispatched and solved.")
+    else
+        println("Hour $hour: FAILED. Status code: ", status_string)
     end
 end
