@@ -6,6 +6,19 @@ using LibPQ
 using DataFrames
 
 function connect_pg()
+    env_file = joinpath(@__DIR__, "..", ".env")
+    if isfile(env_file)
+        for line in eachline(env_file)
+            s = strip(line)
+            (isempty(s) || startswith(s, '#') || !occursin('=', s)) && continue
+            key, val = split(s, '=', limit=2)
+            key = strip(key)
+            if !haskey(ENV, key)
+                ENV[key] = strip(val)
+            end
+        end
+    end
+
     # Prefer a full connection string, then fall back to standard libpq env vars.
     conn_str = get(ENV, "PG_CONN", "")
     if isempty(strip(conn_str))
@@ -23,7 +36,7 @@ function connect_pg()
     end
     
     conn = LibPQ.Connection(conn_str)
-    println("Success! Connected through the tunnel.")
+    println("\nSuccess! Connected through the tunnel.")
 
     return conn
 end

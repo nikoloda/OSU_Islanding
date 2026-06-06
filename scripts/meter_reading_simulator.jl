@@ -63,23 +63,14 @@ let hourly_index = 1
 N_hourly = 24
 
 # Parameter to set how often the meter collects data
-reading_interval = 60
+reading_interval = 45
 
 # Probability at each interval to process a random event case (0.0..1.0)
-interrupt_prob = 0.0
+interrupt_prob = 0.35
 
 
 # PRINT PARAMS:
-println("[db_population_poller] watching: $case_dir")
-println("[db_population_poller] db: $db_path")
-println("[db_population_poller] ideal case: $ideal_case_path")
-println("[db_population_poller] event dir: $event_dir")
-println("[db_population_poller] meter bus: $meter_bus_id")
-println("[db_population_poller] reading interval: $reading_interval")
-println("[db_population_poller] interrupt prob: $interrupt_prob")
-println("[db_population_poller] hourly steps: $N_hourly")
-println("[db_population_poller] sqlite enabled: $USE_LOCAL_SQLITE")
-println("[db_population_poller] postgres enabled: $USE_AWS_POSTGRES")
+println("[db_population_poller] bus=$meter_bus_id steps=$N_hourly interval=$(reading_interval)s interrupt=$interrupt_prob postgres=$USE_AWS_POSTGRES sqlite=$USE_LOCAL_SQLITE")
 
 
 # MAIN METER READING LOOP (runs once every reading_interval):
@@ -110,8 +101,6 @@ while true
 
     # Timestamp reading
     time_stamp = Dates.format(now(), "yyyy-mm-dd HH:MM:SS")
-    
-    println("[db_population_poller] [$time_stamp] processing $(basename(next_file))")
 
 
     # FILE PROCESSING:
@@ -121,12 +110,10 @@ while true
     silent_solver = optimizer_with_attributes(Ipopt.Optimizer, "print_level" => 0)
     result = solve_ac_pf(sys, silent_solver)
 
-    # Extract convergence status (1 means converged, 0 means NOT converged)
-    # Robust check: consider converged if a solution with bus voltages exists,
-    # or if the termination_status indicates a local solve.
-    has_solution = haskey(result, "solution") && haskey(result["solution"], "bus") && !isempty(result["solution"]["bus"]) 
-    status_str = get(result, "termination_status", "")
-    is_converged = Int(has_solution || occursin("LOCALLY_SOLVED", string(status_str)))
+    # Converged only on a feasible local solve (excludes LOCALLY_INFEASIBLE).
+    has_solution = haskey(result, "solution") && haskey(result["solution"], "bus") && !isempty(result["solution"]["bus"])
+    status_str = string(get(result, "termination_status", ""))
+    is_converged = Int(has_solution && occursin("LOCALLY_SOLVED", status_str))
 
     # We should see if the grid converges and decide whether to analyze based on that
     if is_converged == 1
@@ -154,34 +141,34 @@ while true
 
     
     # WRITE RESULTS TO DB:
+    println("\n", "-" ^ 80)
 
     if USE_LOCAL_SQLITE
-        println("\n--- CONNECTING TO LOCAL SQLITE ---")
+        println("[db_population_poller] writing sqlite")
         conn_sq = connect_sqlite()
         ensure_sqlite_schema(conn_sq)
         insert_global_record_sqlite(conn_sq, time_stamp, global_pq_avg, num_islands, is_converged)
         insert_record_sqlite(conn_sq, time_stamp, local_pq, is_converged, meter_bus_id)
-        peek_sqlite(conn_sq)
-        println("\n--- DISCONNECTING FROM SQLITE ---")
+        # peek_sqlite(conn_sq)
     end
 
     if USE_AWS_POSTGRES
-        println("\n--- CONNECTING TO AWS POSTGRESQL ---")
+        println("[db_population_poller] writing postgres")
         conn_pg = connect_pg()
         # Ensure schema exists in Postgres (mirror SQLite init)
         ensure_postgres_schema(conn_pg)
         insert_global_record_pg(conn_pg, time_stamp, global_pq_avg, num_islands, is_converged)
         insert_record_pg(conn_pg, time_stamp, local_pq, is_converged, meter_bus_id)
-        peek_pg(conn_pg)
+        # peek_pg(conn_pg)
         close_pg(conn_pg)
-        println("\n--- DISCONNECTING FROM AWS POSTGRESQL ---")
     end
 
     # Advance hourly index so sequence continues after any event interruption
     hourly_index += 1
 
-    println("[db_population_poller] saved $time_stamp converged=$is_converged global_pq=$global_pq_avg local_pq=$local_pq islands=$num_islands")
+    println("[db_population_poller] [$time_stamp] $(basename(next_file)) | converged=$(is_converged == 1) | islands=$num_islands | outage=$(is_converged == 0) | pq6=$local_pq | g_pq=$global_pq_avg | $status_str")
 
     sleep(reading_interval)
 end
 end
+
