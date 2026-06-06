@@ -6,6 +6,19 @@ using LibPQ
 using DataFrames
 
 function connect_pg()
+    env_file = joinpath(@__DIR__, "..", ".env")
+    if isfile(env_file)
+        for line in eachline(env_file)
+            s = strip(line)
+            (isempty(s) || startswith(s, '#') || !occursin('=', s)) && continue
+            key, val = split(s, '=', limit=2)
+            key = strip(key)
+            if !haskey(ENV, key)
+                ENV[key] = strip(val)
+            end
+        end
+    end
+
     # Prefer a full connection string, then fall back to standard libpq env vars.
     conn_str = get(ENV, "PG_CONN", "")
     if isempty(strip(conn_str))
@@ -23,9 +36,35 @@ function connect_pg()
     end
     
     conn = LibPQ.Connection(conn_str)
-    println("Success! Connected through the tunnel.")
+    println("\nSuccess! Connected through the tunnel.")
 
     return conn
+end
+
+
+function ensure_postgres_schema(conn)
+    DB_create_records = """
+        CREATE TABLE IF NOT EXISTS records (
+            record_id SERIAL PRIMARY KEY,
+            record_time TEXT NOT NULL,
+            power_quality REAL,
+            status INTEGER,
+            bus_id INTEGER
+        );
+    """
+
+    DB_create_global = """
+        CREATE TABLE IF NOT EXISTS globalRecords (
+            global_record_id SERIAL PRIMARY KEY,
+            record_time TEXT NOT NULL UNIQUE,
+            power_quality REAL,
+            num_islands INTEGER,
+            converges INTEGER
+        );
+    """
+
+    execute(conn, DB_create_records)
+    execute(conn, DB_create_global)
 end
 
 
@@ -63,15 +102,26 @@ end
 
 function peek_pg(conn)
     println("\n[PostgreSQL] Tables in Public Schema:")
-    res_tables = execute(conn, "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public';")
-    display(DataFrame(res_tables))
+    res_tables = execute(conn, "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public' ORDER BY tablename;")
+    tables = DataFrame(res_tables)
+    display(tables)
 
-    println("\n[PostgreSQL] First 10 rows of 'buses' table:")
-    res_data = execute(conn, "SELECT * FROM buses LIMIT 10;")
-    display(DataFrame(res_data))
+    for table_name in tables.tablename
+        println("\n[PostgreSQL] First 10 rows of '$table_name':")
+        safe_table = replace(table_name, "\"" => "\"\"")
+        query = "SELECT * FROM \"$safe_table\" $(table_name == "records" ? "ORDER BY record_id DESC" : table_name == "globalRecords" ? "ORDER BY global_record_id DESC" : "") LIMIT 10;"
+        res_data = execute(conn, query)
+        display(DataFrame(res_data))
+    end
 end
 
 function close_pg(conn)
     close(conn)
+end
+
+function clear_records_pg!(conn)
+    println("[PostgreSQL] Deleting all rows from 'records' and 'globalRecords'")
+    execute(conn, "TRUNCATE TABLE records, globalRecords RESTART IDENTITY;")
+    return true
 end
 

@@ -4,11 +4,12 @@ Most domestic smart meters have very limited computing power and thus lack the a
 ## Project Layout
 - `notebooks/` contains the analysis notebooks.
 - `src/` contains the Julia helper modules for database work.
+- `db_manual/` contains hand-run scripts to inspect or reset databases: `peek_sqlite.jl` / `clear_sqlite_records.jl` (local SQLite), `peek_postgres.jl` / `clear_postgres_records.jl` (AWS via `PG_*` env vars).
 - `cases/` contains the MATPOWER case files used by the notebooks.
 
 ## Environment
-- Use `.env` for local configuration.
-- `PG_CONN` is used by `src/DB_AWS_PostgreSQL.jl`.
+- Use `.env` in the repo root for local configuration (`connect_pg()` loads it automatically).
+- Set `PG_CONN` or `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD`.
 
 ## Synthetic Cases
 Use `scripts/matpower_case_generator.jl` to write slightly perturbed MATPOWER cases into `data/generated_cases/`.

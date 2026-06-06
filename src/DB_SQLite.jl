@@ -5,6 +5,28 @@ function connect_sqlite()
     return SQLite.DB("test_simple_grid_database.sqlite")
 end
 
+function ensure_sqlite_schema(conn)
+    DBInterface.execute(conn, """
+        CREATE TABLE IF NOT EXISTS records (
+            record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_time TEXT NOT NULL,
+            power_quality REAL,
+            status INTEGER,
+            bus_id INTEGER
+        )
+    """)
+
+    DBInterface.execute(conn, """
+        CREATE TABLE IF NOT EXISTS globalRecords (
+            global_record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_time TEXT NOT NULL UNIQUE,
+            power_quality REAL,
+            num_islands INTEGER,
+            converges INTEGER
+        )
+    """)
+end
+
 function insert_record_sqlite(conn, time_stamp, local_pq, converged_int, meter_bus_id)
     query = """
         INSERT INTO records(record_time, power_quality, status, bus_id)
@@ -28,7 +50,6 @@ function insert_global_record_sqlite(conn, time_stamp, global_pq_avg, num_island
     
     # If we do not have any entries at this time, we should add to the DB
     if existing_entry.count == 0
-    
         DBInterface.execute(conn, """
             INSERT INTO globalRecords (record_time, power_quality, num_islands, converges)
             VALUES (?, ?, ?, ?)
@@ -43,10 +64,23 @@ end
 function peek_sqlite(conn)
     println("\n[SQLite] Tables in Database:")
     # SQLite uses sqlite_master to list tables instead of pg_catalog
-    res_tables = DBInterface.execute(conn, "SELECT name as tablename FROM sqlite_master WHERE type='table';")
-    display(DataFrame(res_tables))
+    res_tables = DBInterface.execute(conn, "SELECT name as tablename FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;")
+    tables = DataFrame(res_tables)
+    display(tables)
 
-    println("\n[SQLite] First 10 rows of 'buses' table:")
-    res_data = DBInterface.execute(conn, "SELECT * FROM buses LIMIT 10;")
-    display(DataFrame(res_data))
+    for table_name in tables.tablename
+        println("\n[SQLite] Most recent 10 rows of '$table_name':")
+        safe_table = replace(table_name, "\"" => "\"\"")
+        order_clause = table_name == "records" ? "ORDER BY record_id DESC" : table_name == "globalRecords" ? "ORDER BY global_record_id DESC" : "ORDER BY rowid DESC"
+        query = "SELECT * FROM \"$safe_table\" $order_clause LIMIT 10;"
+        res_data = DBInterface.execute(conn, query)
+        display(DataFrame(res_data))
+    end
+end
+
+function clear_records_sqlite(conn)
+    println("[SQLite] Deleting all rows from 'records' and 'globalRecords'")
+    DBInterface.execute(conn, "DELETE FROM records;")
+    DBInterface.execute(conn, "DELETE FROM globalRecords;")
+    return true
 end
